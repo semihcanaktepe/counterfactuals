@@ -1,0 +1,347 @@
+---
+title: "Eye-tracking-viz"
+author: "Semih Can Aktepe"
+date: "2023-04-29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Set the working directory
+```{r}
+setwd("/Users/semih/Desktop")
+```
+
+### Load the necessary packages
+```{r}
+library(brms)
+library(ggplot2)
+library(stringr)
+library(posterior)
+library(bayestestR)
+library(BayesFactor)
+library(marginaleffects)
+```
+
+### Load the data set
+```{r}
+et <- read.csv("~/Desktop/eyetracking.csv")
+```
+
+### Convert the data types into appropriate formats
+```{r}
+et$id <- as.factor(et$id)
+et$subject <- as.factor(et$subject)
+et$group <- as.factor(et$group)
+et$item <- as.factor(et$item)
+et$condition <- as.factor(et$condition)
+et$outcome <- as.factor(et$outcome)
+et$itemtype <- as.factor(et$itemtype)
+```
+
+## Visualization
+
+### Define the colors
+```{r}
+# Define custom colors
+col1 <- rgb(red = 1, green = 0.647, blue = 0, alpha = 1)
+col1p <- rgb(red = 1, green = 0.647, blue = 0, alpha = 0.25)
+col1l <- rgb(red = 1, green = 0.647, blue = 0, alpha = 0.025)
+col2 <- rgb(red = 0.12, green = 0.56, blue = 1, alpha = 1)
+col2p <- rgb(red = 0.12, green = 0.56, blue = 1, alpha = 0.25)
+col2l <- rgb(red = 0.12, green = 0.56, blue = 1, alpha = 0.025)
+col3 <- rgb(red = 0.196, green = 0.804, blue = 0.196, alpha = 1)
+col3p <- rgb(red = 0.196, green = 0.804, blue = 0.196, alpha = 0.25)
+col3l <- rgb(red = 0.196, green = 0.804, blue = 0.196, alpha = 0.025)
+col4 <- rgb(red = 0.969, green = 0.325, blue = 0.58, alpha = 1)
+col4p <- rgb(red = 0.969, green = 0.325, blue = 0.58, alpha = 0.25)
+col4l <- rgb(red = 0.969, green = 0.325, blue = 0.58, alpha = 0.025)
+```
+
+### Prepare the data for visualization
+```{r}
+# Binarize the binned data.
+et$t <- ifelse(et$target>5, 1, 0)
+et$c <- ifelse(et$competitor>5, 1, 0)
+et$cluster <- paste(str_sub(et$group, 1, 2), str_sub(et$itemtype), sep = "")
+# This is going to be useful for setting up Gaussian process terms.
+et$cluster <- as.factor(et$cluster)
+# Remove the points that are outside either of the AoIs.
+et <- et[et$t==1 | et$c==1,]
+```
+
+```{r}
+et$ss <- 1 # Dummy variable for standard error and confidence interval calculations.
+d1 <- aggregate(t ~ Time + cluster, data = et, FUN = mean)
+d2 <- aggregate(t ~ Time + cluster, data = et, FUN = sd)
+d3 <- aggregate(ss ~ Time + cluster, data = et, FUN = sum)
+
+d <- cbind(d1, sd = d2$t, ss = d3$ss) #%>% arrange(condition, outcome)
+d$se <- d$sd/sqrt(d$ss)
+alpha = 0.05
+d$ci <- qt(p=alpha/2, df=d$ss,lower.tail=F)*(d$sd/sqrt(d$ss))
+d$Low <- d$t - d$ci
+d$High <- d$t + d$ci
+rm(d1,d2,d3)
+```
+
+```{r}
+len_d <- nrow(d)
+l <- c(1)
+for (i in 1:8){
+  l[i+1] <- l[i] + len_d/8
+}
+l
+```
+
+#### Print the plot
+```{r}
+ts <- 0:48*100 #Define a time series
+#par(mfrow=c(2,2))
+# Counterfactual Negative
+plot(NULL, xlim = c(0,4800), ylim = c(0,1), xlab = "Time", ylab = "Target Looks",
+     main = "Counterfactual Negative", bty = "l")
+polygon(c(ts, rev(ts)), c(d$Low[1:49], rev(d$High[1:49])), col = col1p, border = NA)
+lines(ts, d$t[1:49], type = "l", lwd = 2, col = col1)
+polygon(c(ts, rev(ts)), c(d$Low[197:245], rev(d$High[197:245])), col = col2p, border = NA)
+lines(ts, d$t[197:245], type = "l", lwd = 2, col = col2)
+abline(v=c(675, 1241, 2204, 2453, 3806), lty = 3)
+abline(h=0.5, lty = 1)
+text(c(0, 675, 2204, 2453), 0,
+     c("Can", "arabayı", "sürseydi", "işe zamanında yetişecekti."), 
+     pos = c(4,4,2,4), font = 3, cex = 0.75)
+text(c(0, 675, 2204, 2453, 3806), 1,
+     c("John", "car", "had driven", "job on time would've been.", "Target: Bicycle"), 
+     pos = c(4,4,2,4,4), font = c(3,3,3,3,2), cex = 0.75)
+legend("bottomright", inset = 0.03, title = "Age Group", c("Adults", "Children"), 
+       col = c(col1, col2), lty = 1, lwd = 2, cex = 0.7)
+
+# Counterfactual Positive
+plot(NULL, xlim = c(0,4800), ylim = c(0,1), xlab = "Time", ylab = "Target Looks",
+     main = "Counterfactual Positive", bty = "l")
+polygon(c(ts, rev(ts)), c(d$Low[50:98], rev(d$High[50:98])), col = col1p, border = NA)
+lines(ts, d$t[50:98], type = "l", lwd = 2, col = col1)
+polygon(c(ts, rev(ts)), c(d$Low[246:294], rev(d$High[246:294])), col = col2p, border = NA)
+lines(ts, d$t[246:294], type = "l", lwd = 2, col = col2)
+abline(v=c(675, 1241, 2204, 2453, 3806), lty = 3)
+abline(h=0.5, lty = 1)
+text(c(0, 675, 2204, 2453, 3806), 0,
+     c("Can", "bisikleti", "sürseydi", "işe geç", "kalacaktı."), 
+     pos = c(4,4,2,4,2), font = 3, cex = 0.75)
+text(c(0, 675, 2204, 2453, 3806, 3806), 1,
+     c("John", "bicycle", "had ridden", "job late", "would've been.", "Target: Car"), 
+     pos = c(4,4,2,4,2,4), font = c(3,3,3,3,3,2), cex = 0.75)
+legend("bottomright", inset = 0.03, title = "Age Group", c("Adults", "Children"), 
+       col = c(col1, col2), lty = 1, lwd = 2, cex = 0.7)
+
+# Indicative Negative
+plot(NULL, xlim = c(0,4800), ylim = c(0,1), xlab = "Time", ylab = "Target Looks",
+     main = "Indicative Negative", bty = "l")
+polygon(c(ts, rev(ts)), c(d$Low[99:147], rev(d$High[99:147])), col = col1p, border = NA)
+lines(ts, d$t[99:147], type = "l", lwd = 2, col = col1)
+polygon(c(ts, rev(ts)), c(d$Low[295:343], rev(d$High[295:343])), col = col2p, border = NA)
+lines(ts, d$t[295:343], type = "l", lwd = 2, col = col2)
+abline(v=c(675, 1241, 2204, 2453, 3806), lty = 3)
+abline(h=0.5, lty = 1)
+text(c(0, 675, 2204, 2453, 3806), 0,
+     c("Can", "bisikleti", "sürerse", "işe geç", "kalacak."), 
+     pos = c(4,4,2,4,2), font = 3, cex = 0.75)
+text(c(0, 675, 2204, 2453, 3806, 3806), 1,
+     c("John", "bicycle", "rides", "job late", "will be.", "Target: Car"), 
+     pos = c(4,4,2,4,2,4), font = c(3,3,3,3,3,2), cex = 0.75)
+legend("bottomright", inset = 0.03, title = "Age Group", c("Adults", "Children"), 
+       col = c(col1, col2), lty = 1, lwd = 2, cex = 0.7)
+
+# Indicative Positive
+plot(NULL, xlim = c(0,4800), ylim = c(0,1), xlab = "Time", ylab = "Target Looks",
+     main = "Indicative Positive", bty = "l")
+polygon(c(ts, rev(ts)), c(d$Low[148:196], rev(d$High[148:196])), col = col1p, border = NA)
+lines(ts, d$t[148:196], type = "l", lwd = 2, col = col1)
+polygon(c(ts, rev(ts)), c(d$Low[344:392], rev(d$High[344:392])), col = col2p, border = NA)
+lines(ts, d$t[344:392], type = "l", lwd = 2, col = col2)
+abline(v=c(675, 1241, 2204, 2453, 3806), lty = 3)
+abline(h=0.5, lty = 1)
+text(c(0, 675, 2204, 2453), 0,
+     c("Can", "arabayı", "sürerse", "işe zamanında yetişecek."), 
+     pos = c(4,4,2,4), font = 3, cex = 0.75)
+text(c(0, 675, 2204, 2453, 3806, 3806), 1,
+     c("John", "car", "drives", "job on time", "will be.", "Target: Car"), 
+     pos = c(4,4,2,4,2,4), font = c(3,3,3,3,3,2), cex = 0.75)
+legend("bottomright", inset = 0.03, title = "Age Group", c("Adults", "Children"), 
+       col = c(col1, col2), lty = 1, lwd = 2, cex = 0.7)
+
+#par(mfrow=c(1,1))
+```
+
+## Statistical Analysis
+
+### Selecting the period of interest (PoI).
+Our PoI is the time window starting from the offset of the verb in the antecedent to the beginning of the comprehension question.
+```{r}
+et1 <- et[et$Time>2199,]
+```
+
+### Prepare the data for statistical analysis
+```{r}
+et2 <- aggregate(ss ~ bin + cluster, data = et1, FUN=sum)
+et3 <- aggregate(t ~ bin + cluster, data = et1, FUN=sum)
+et4 <- aggregate(c ~ bin + cluster, data = et1, FUN=sum)
+et2 <- cbind(et2, target = et3$t, competitor = et4$c)
+et2$obs <- et2$ss
+et2$ss <- NULL
+rm(et3,et4)
+```
+
+### Fit the model
+```{r}
+m3 <- brm(target | trials(obs) ~ 1 + cluster + # Intercept and fixed effect of cluster of group, condition, and outcome
+            gp(bin, by = cluster), # Gaussian process term varying for each cluster
+          prior = c(prior(normal(0, 1), class = Intercept),
+                    prior(normal(0, 1), class = b),
+                    prior(inv_gamma(3, 1), class = lscale),
+                    prior(exponential(1), class = sdgp)),
+          data = et2, family = binomial, sample_prior = TRUE,
+          iter = 4000, warmup = 2000, chains = 4, cores = 8,
+          control = list(adapt_delta = 0.99, max_treedepth = 12))
+```
+
+### Check the model fit.
+```{r}
+plot(m3, ask = FALSE)
+```
+
+### Posterior predictive check.
+```{r}
+pp_check(m3, ask = FALSE)
+```
+
+### Model Summary
+```{r}
+summary(m3, prob = .95)
+```
+
+### Leave-One-Out Cross Validation
+```{r}
+loo(m3, cores = 8)
+```
+
+### Bayesian R^2
+```{r}
+bayes_R2(m3)
+```
+
+## Posterior predictives
+
+### Extract posterior samples
+```{r}
+post_m3 <- as.data.frame(posterior_epred(m3, newdata = et2))
+```
+
+#### Get the proportions
+```{r}
+for (i in 1:216){
+  post_m3[,i] <- post_m3[,i]/et2$obs[i]
+}
+```
+
+### Get the means
+```{r}
+p_mean <- c()
+for (i in 1:216){
+  p_mean[i] <- mean(post_m3[,i])
+}
+```
+
+### Get the 95% CrIs
+```{r}
+pred <- ci(post_m3, method = "HDI")
+pred$est <- p_mean
+```
+
+### Plot the posterior predictives
+```{r}
+# Define bin series
+bs <- 22:48*100
+# Counterfactual Negative
+plot(NULL, xlim = c(2200,4800), ylim = c(0,1), xlab = "Time", ylab = "Target Looks",
+     main = "Counterfactual Negative", bty = "l")
+polygon(c(bs, rev(bs)), c(pred$CI_low[1:27], rev(pred$CI_high[1:27])), col = col1p, border = NA)
+lines(bs, pred$est[1:27], col = col1, lwd = 2)
+polygon(c(bs, rev(bs)), c(pred$CI_low[109:135], rev(pred$CI_high[109:135])), col = col2p, border = NA)
+lines(bs, pred$est[109:135], col = col2, lwd = 2)
+abline(h = 0.5, lty = 2)
+legend("bottomright", inset = 0.03, title = "Age Group", c("Adults", "Children"), col = c(col1, col2), 
+       lty = 1, lwd=2, cex = 0.75)
+
+# Counterfactual Positive
+plot(NULL, xlim = c(2200,4800), ylim = c(0,1), xlab = "Time", ylab = "Target Looks",
+     main = "Counterfactual Positive", bty = "l")
+polygon(c(bs, rev(bs)), c(pred$CI_low[28:54], rev(pred$CI_high[28:54])), col = col1p, border = NA)
+lines(bs, pred$est[28:54], col = col1, lwd = 2)
+polygon(c(bs, rev(bs)), c(pred$CI_low[136:162], rev(pred$CI_high[136:162])), col = col2p, border = NA)
+lines(bs, pred$est[136:162], col = col2, lwd = 2)
+abline(h = 0.5, lty = 2)
+legend("bottomright", inset = 0.03, title = "Age Group", c("Adults", "Children"), col = c(col1, col2), 
+       lty = 1, lwd=2, cex = 0.75)
+
+# Indicative Negative
+plot(NULL, xlim = c(2200,4800), ylim = c(0,1), xlab = "Time", ylab = "Target Looks",
+     main = "Indicative Negative", bty = "l")
+polygon(c(bs, rev(bs)), c(pred$CI_low[55:81], rev(pred$CI_high[55:81])), col = col1p, border = NA)
+lines(bs, pred$est[55:81], col = col1, lwd = 2)
+polygon(c(bs, rev(bs)), c(pred$CI_low[163:189], rev(pred$CI_high[163:189])), col = col2p, border = NA)
+lines(bs, pred$est[163:189], col = col2, lwd = 2)
+abline(h = 0.5, lty = 2)
+legend("bottomright", inset = 0.03, title = "Age Group", c("Adults", "Children"), col = c(col1, col2), 
+       lty = 1, lwd=2, cex = 0.75)
+
+# Indicative Positive
+plot(NULL, xlim = c(2200,4800), ylim = c(0,1), xlab = "Time", ylab = "Target Looks",
+     main = "Indicative Positive", bty = "l")
+polygon(c(bs, rev(bs)), c(pred$CI_low[82:108], rev(pred$CI_high[82:108])), col = col1p, border = NA)
+lines(bs, pred$est[82:108], col = col1, lwd = 2)
+polygon(c(bs, rev(bs)), c(pred$CI_low[190:216], rev(pred$CI_high[190:216])), col = col2p, border = NA)
+lines(bs, pred$est[190:216], col = col2, lwd = 2)
+abline(h = 0.5, lty = 2)
+legend("bottomright", inset = 0.03, title = "Age Group", c("Adults", "Children"), col = c(col1, col2), 
+       lty = 1, lwd=2, cex = 0.75)
+```
+
+### Extract the posterior of the parameters
+```{r}
+ps <- as.data.frame(as_draws_df(m3))
+```
+
+### Covariance Kernel
+
+### Extract the parameters to visualize the covariance kernel
+```{r}
+sdgp_mean <- c()
+lscale_mean <- c()
+for (i in 9:16){
+  sdgp_mean[i] <- mean(ps[,i])
+}
+for (i in 17:24){
+  lscale_mean[i] <- mean(ps[,i])
+}
+sdgp_mean <- na.omit(sdgp_mean)
+lscale_mean <- na.omit(lscale_mean)
+```
+
+### Plot the covariance Kernel for each cluster
+```{r}
+plot(NULL, xlim = c(1,26), ylim = c(0,1), xlab = "Distance (ms.)", ylab = "Covariance",
+     main = "Covariance Kernel", bty = "l", xaxt = "n")
+for (i in 1:8){
+  curve(sdgp_mean[i]*exp(-(x^2)/2*lscale_mean[i]^2), add = TRUE, lwd = 4, col = i)
+}
+axis(1, at=c(1,5,10,15,20,25), c(100, 500, 1000, 1500, 2000, 2500))
+legend("topright", inset = 0.03, title = "Cluster", levels(et$cluster), col = 1:8, lty = 1, lwd = 4)
+```
+
+### Session Info
+```{r}
+sessionInfo()
+```

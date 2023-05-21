@@ -1,0 +1,458 @@
+---
+title: "Analysis of Response Data"
+author: "Semih Can Aktepe"
+date: "2023-04-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### First set the working directory.
+All the data files are in this folder, so we extract the data from here.
+```{r}
+setwd("/Users/semih/Desktop/cf_responses")
+```
+
+### Load the necessary packages
+```{r}
+library(dplyr)
+library(ggplot2)
+library(brms)
+library(posterior)
+library(BayesFactor)
+library(bayestestR)
+```
+
+### Load the data set
+```{r}
+response <- read.csv("~/Desktop/response.csv")
+```
+
+## Preparation
+
+### Convert the data types into appropriate formats
+```{r}
+response$id <- as.factor(response$id)
+response$subject <- as.factor(response$subject)
+response$group <- as.factor(response$group)
+response$item <- as.factor(response$item)
+response$condition <- as.factor(response$condition)
+response$outcome <- as.factor(response$outcome)
+```
+
+### Demographic information
+```{r}
+# Age
+age <- aggregate(age ~ group + subject, data = response, FUN = max) %>% arrange(group)
+
+# Adults age mean, standard deviation, minimum and maximum
+n_ad <- 17
+n_ad_fem <- 10
+age_ad <- mean(age[age$group == "Adult",]$age, na.rm = TRUE)
+sd_ad <- sd(age[age$group == "Adult",]$age, na.rm = TRUE)
+min_ad <- min(age[age$group == "Adult",]$age, na.rm = TRUE)
+max_ad <- max(age[age$group == "Adult",]$age, na.rm = TRUE)
+adult_demo <- c(n_ad, age_ad, sd_ad, min_ad, max_ad)
+
+# Children age mean, standard deviation, minimum and maximum
+n_ch <- 39-n_ad
+n_ch_fem <- 12
+age_ch <- mean(age[age$group == "Child",]$age, na.rm = TRUE)/12
+sd_ch <- sd(age[age$group == "Child",]$age, na.rm = TRUE)/12
+min_ch <- min(age[age$group == "Child",]$age, na.rm = TRUE)/12
+max_ch <- max(age[age$group == "Child",]$age, na.rm = TRUE)/12
+child_demo <- c(n_ch, age_ch, sd_ch, min_ch, max_ch)
+
+# Print the results
+adult_demo %>% round(2)
+child_demo %>% round(2)
+```
+
+### Visualization
+
+### Data preparation
+```{r}
+response$ss <- 1 # Dummy variable for standard error and confidence interval calculations.
+d1 <- aggregate(accuracy ~ group + condition + outcome, data = response, FUN = mean)
+d2 <- aggregate(accuracy ~ group + condition + outcome, data = response, FUN = sd)
+d3 <- aggregate(ss ~ group + condition + outcome, data = response, FUN = sum)
+
+d <- cbind(d1, sd = d2$accuracy, ss = d3$ss) %>% arrange(condition, outcome)
+d$se <- d$sd/sqrt(d$ss)
+alpha = 0.05
+d$ci <- qt(p=alpha/2, df=d$ss,lower.tail=F)*(d$sd/sqrt(d$ss))
+d$Low <- d$accuracy - d$ci
+d$High <- d$accuracy + d$ci
+rm(d1,d2,d3)
+```
+
+### Define a new variable for ease
+```{r}
+d$itemtype <- "Counterfactual Positive"
+d$itemtype[d$condition == "Counterfactual" & d$outcome == "Negative"] <- "Counterfactual Negative"
+d$itemtype[d$condition == "Indicative" & d$outcome == "Positive"] <- "Indicative Positive"
+d$itemtype[d$condition == "Indicative" & d$outcome == "Negative"] <- "Indicative Negative"
+```
+
+### Define custom colors
+```{r}
+col1 <- rgb(red = 1, green = 0.647, blue = 0, alpha = 1)
+col1l <- rgb(red = 1, green = 0.647, blue = 0, alpha = 0.025)
+col2 <- rgb(red = 0.12, green = 0.56, blue = 1, alpha = 1)
+col2l <- rgb(red = 0.12, green = 0.56, blue = 1, alpha = 0.025)
+col3 <- rgb(red = 0.196, green = 0.804, blue = 0.196, alpha = 1)
+col3l <- rgb(red = 0.196, green = 0.804, blue = 0.196, alpha = 0.025)
+col4 <- rgb(red = 0.969, green = 0.325, blue = 0.58, alpha = 1)
+col4l <- rgb(red = 0.969, green = 0.325, blue = 0.58, alpha = 0.025)
+```
+
+### Barplots with 95% Confidence Intervals
+```{r}
+ggplot(data = d, aes(x = itemtype, y = accuracy*100, fill = group)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_errorbar(aes(ymin = (accuracy - se)*100, ymax = (accuracy + se)*100),
+                position = position_dodge(width = 0.9), width = 0.2) +
+  labs(title = "Percentage of Correct Responses (95% CI)",
+       x = "Type of Conditional Sentence", y = "Accuracy (%)",
+       fill = "Age Group") +
+  scale_fill_manual(labels=c("Adults", "Children"), values=c(col1, col2)) +
+  scale_y_continuous(expand = c(0,0), limits = c(0,105)) +
+  theme_classic()
+```
+
+## Statistical Analysis
+
+### Sum Coding
+```{r}
+response$Group <- ifelse(response$group == "Adult", 1, -1)
+response$Condition <- ifelse(response$condition == "Counterfactual", 1, -1)
+response$Outcome <- ifelse(response$outcome == "Negative", 1, -1)
+```
+
+### Fit the model
+```{r}
+m1 <- brm(accuracy ~ 1 + Group*Condition*Outcome # Fixed Effects
+          + (1 + Group*Condition*Outcome | subject) # Varying intercept and slope of subject
+          + (1 + Group*Condition*Outcome | item), # Varying intercept and slope of item
+          prior = c(prior(normal(0, 1), class = Intercept),
+                    prior(normal(0, 1), class = b),
+                    prior(exponential(1), class = sd),
+                    prior(lkj(4), class = cor)),
+          data = response, family = bernoulli, sample_prior = TRUE,
+          iter = 4000, warmup = 2000, chains = 4, cores = 8,
+          control = list(adapt_delta = 0.99, max_treedepth = 12))
+```
+
+### Check the model fit
+```{r}
+plot(m1, ask = FALSE)
+```
+
+### Posterior Predictive Check
+```{r}
+pp_check(m1)
+```
+
+### Model Summary
+```{r}
+summary(m1, prob = .95)
+```
+
+### Hypothesis testing of whether the fixed effects deviate from 0
+```{r}
+hypotheses <- c("Group = 0", # There is no effect of group.
+                "Condition = 0", # There is no effect of condition.
+                "Outcome = 0") # There is no effect of outcome
+hyp <- hypothesis(m1, hypothesis = hypotheses, class = "b")
+plot(hyp)
+```
+
+```{r}
+hyp$hypothesis$Evid.Ratio %>% round(digits = 2)
+
+# H0: There is no effect of group, condition, and outcome, respectively.
+# H1: There is an effect of group, condition, and outcome, respectively.
+
+# Group: Extreme evidence for H1
+# Condition: Anecdotal evidence for H0
+# Outcome: Anecdotal evidence for H1
+```
+
+### Conditional effects
+```{r}
+plot(conditional_effects(m1), ask = FALSE)
+```
+
+### Leave-One-Out (LOO) Cross Validation
+```{r}
+loo(m1)
+```
+
+### Print Bayesian R^2
+```{r}
+bayes_R2(m1)
+```
+
+### Extract the posterior samples of the parameters.
+```{r}
+post <- as_draws_df(m1)
+```
+
+### If an effect is negative, check the probability that it is positive; if positive, vice versa.
+```{r}
+mean(post$b_Group < 0)
+mean(post$b_Condition > 0)
+mean(post$b_Outcome > 0)
+mean(post$`b_Group:Condition` < 0)
+mean(post$`b_Group:Outcome` < 0)
+mean(post$`b_Condition:Outcome` > 0)
+mean(post$`b_Group:Condition:Outcome` > 0)
+```
+
+### Posterior Predictive Simulation for the Fixed Effects
+
+### Prepare the simulation data
+```{r}
+group <- rep(c("Adult", "Child"), times = 4)
+condition <- rep(c("Counterfactual", "Indicative"), each = 4)
+outcome <- rep(rep(c("Negative", "Positive"), each = 2), times = 2)
+newdata <- data.frame(group = group, condition = condition, outcome = outcome)
+newdata$Group <- ifelse(newdata$group == "Adult", 1, -1)
+newdata$Condition <- ifelse(newdata$condition == "Counterfactual", 1, -1)
+newdata$Outcome <- ifelse(newdata$outcome == "Negative", 1, -1)
+```
+
+### Posterior Predictives excluding random effects
+```{r}
+pp <- as.data.frame(posterior_epred(m1, newdata = newdata, re_formula = NA))
+pp2 <- ci(pp, ci=0.95, method = "HDI")
+```
+
+### Visualization of Posterior Predictives
+```{r}
+# Define custom points for where to plot the data
+cp <- c(0.1, 0.15, 0.25, 0.3, 0.4, 0.45, 0.55, 0.6)
+# Define the labels to replace numeric points
+labels <- c("Counterfactual\nNegative", "Counterfactual\nPositive", 
+            "Indicative\nNegative", "Indicative\nPositive")
+# Plot the data
+plot(NULL, xlim = c(0.05,0.65), ylim = c(0,100), 
+     main = "Posterior Predictive Distribution of Accuracy (95% CrI)",
+     xlab = "Type of Conditional Sentence", ylab = "Accuracy (%)", xaxt = "n", bty = "l")
+for (i in 1:8){
+  for (j in 1:8000){
+    points(cp[i], pp[j,i]*100, pch = 19, cex = 1, col = ifelse(i%%2==1, col1l, col2l))
+    arrows(cp[i], pp2$CI_low[i]*100, cp[i], pp2$CI_high[i]*100, length = 0, code=3, col = "black", lwd = 1)
+    points(cp[i], mean(pp[,i])*100, pch = 21, cex = 0.75, col = "black", 
+           bg = ifelse(i%%2==1, col1, col2))
+  }
+}
+axis(1, at = c(0.125, 0.275, 0.425, 0.575), labels = labels, cex.axis = 0.75)
+legend("bottomright", inset = 0.03, title = "Age Group",  c("Adults", "Children"),
+       col = c(col1, col2), pch = 19, cex = 0.75)
+```
+
+### Posterior Predictive Simulation for Varying Effect of Subject
+
+### Prepare the simulation data
+```{r}
+subject <- rep(1:39, each = 4)
+condition <- rep(rep(c("Counterfactual", "Indicative"), each = 2), times = 39)
+outcome <- rep(c("Negative", "Positive"), times = 39*2)
+group <- c(rep("Adult", times = 16), rep("Child", times = 39-16))
+newdataS <- data.frame(subject = subject, group = group, condition = condition, outcome = outcome)
+newdataS$Group <- ifelse(newdataS$group == "Adult", 1, -1)
+newdataS$Condition <- ifelse(newdataS$condition == "Counterfactual", 1, -1)
+newdataS$Outcome <- ifelse(newdataS$outcome == "Negative", 1, -1)
+```
+
+### Map the simulations to the new data.
+```{r}
+pps <- as.data.frame(posterior_epred(m1, newdata = newdataS, 
+                                     re_formula = ~ (1 + Group*Condition*Outcome | subject)))
+pps2 <- ci(pps, method = "HDI")
+```
+
+### Visualization
+```{r}
+cps <- 1:156
+random_sample <- sample(1:8000, 1000, replace = TRUE)
+# Plot the data
+plot(NULL, xlim = c(1,156), ylim = c(0,100), 
+     main = "Posterior Predictive Distribution of Accuracy (95% CrI)",
+     xlab = "Subject", ylab = "Accuracy (%)", xaxt = "n", bty = "l")
+for (i in 1:156){
+  for (j in random_sample){
+    points(cps[i], pps[j,i]*100, pch = 16, cex = 0.5,
+           col = ifelse(i%%4==1, col1l,
+                        ifelse(i%%4==2, col2l,
+                               ifelse(i%%4==3, col3l, col4l))))
+    #arrows(cps[i], pps2$CI_low[i]*100, cps[i], pps2$CI_high[i]*100, length = 0, code = 3, col = "black", lwd = 0.33)
+    points(cps[i], mean(pps[,i])*100, pch = 21, cex = 0.5, col = "black", 
+           bg = ifelse(i%%4==1, col1,
+                       ifelse(i%%4==2, col2,
+                              ifelse(i%%4==3, col3, col4))))
+  }
+}
+abline(v = 68.5, lty = 3, lwd = 0.75)
+axis(1, at = seq(from=2.5, to = 153.5, length.out = 39), labels = 1:39, cex.axis = 0.75)
+legend("bottomleft", inset = 0.01, title = "Type", c("CN", "CP", "IN", "IP"),
+       col = c(col1, col2, col3, col4), pch = 16, cex = 0.75)
+```
+
+## Effect of Executive Functions on Accuracy
+
+### Z-transformation of the variables
+```{r}
+response$zI <- scale(response$inhibition)[,1]
+response$zSTM <- scale(response$stm)[,1]
+response$zWM <- scale(response$wm)[,1]
+```
+
+### Aggregation for visualization
+```{r}
+ef0 <- aggregate(accuracy ~ subject, data = response, FUN = sum)
+ef0$zA <- scale(ef0$accuracy)[,1]
+ef0$subject <- as.integer(ef0$subject)
+ef1 <- aggregate(zI ~ subject, data = response, FUN = max)
+ef1$subject <- as.integer(ef1$subject)
+ef2 <- aggregate(zSTM ~ subject, data = response, FUN = max)
+ef2$subject <- as.integer(ef2$subject)
+ef3 <- aggregate(zWM ~ subject, data = response, FUN = max)
+ef3$subject <- as.integer(ef3$subject)
+```
+
+### Visualization
+```{r}
+plot(NULL, xlim = c(1,39), ylim = c(-3,3), xlab = "Subject", ylab = "Score (z-transformed)",
+     main = "Distribution of Cognitive Task Scores", bty = "l", xaxt = "n")
+points(ef0$subject, ef0$zA, col = "black", pch = 8, cex = 0.75)
+points(ef1$subject, ef1$zI, col = col1, pch = 19)
+points(ef2$subject, ef2$zSTM, col = col2, pch = 15)
+points(ef3$subject, ef3$zWM, col = col3, pch = 17)
+abline(v=16.5, lty = 3, lwd = 1)
+axis(1, at = 1:39)
+text(c(8, 25), c(-2,2), c("Adults", "Children"), font = 2)
+legend("topright", inset = 0.03, title = "Task", c("Experiment", "Inhibition", "STM", "WM"),
+       col = c("black", col1, col2, col3), pch = c(8,19,15,17), cex = 0.7)
+```
+
+## Analysis of Children Only
+
+### Subset the data to analyze only the children
+```{r}
+children <- subset(response, group == "Child")
+children$zA <- scale(children$age)[,1]
+```
+
+### Bayesian Correlations for Children Only
+```{r}
+# Extract the necessary columns
+corDat <- data.frame(age=children$zA,
+                     acc=children$accuracy,
+                     ihb=children$zI,
+                     stm=children$zSTM,
+                     wm=children$zWM)
+
+# Create a correlation table
+corrTable <- as.data.frame(matrix(nrow = 5, ncol = 5))
+rownames(corrTable) <- c("Age", "Accuracy", "Inhibition", "Short-Term", "Working")
+colnames(corrTable) <- c("Age", "Accuracy", "Inhibition", "Short-Term", "Working")
+
+# Compute posterior rho's
+for (i in 1:5){
+  for (j in 1:5){
+    sample <- correlationBF(y = corDat[,i], x = corDat[,j],
+                            posterior = TRUE, iterations = 1e4,
+                            rscale = 1)
+    corrTable[i,j] <- paste(round(mean(sample[,"rho"]), 2),
+                            " CrI: [",round(ci(as.vector(sample[,"rho"]), method = "HDI")$CI_low, 2),
+                            ", ", round(ci(as.vector(sample[,"rho"]), method = "HDI")$CI_high, 2), "]",
+                            sep = "")
+  }
+}
+
+# Print the correlation table
+corrTable
+```
+
+#### Fit the model
+```{r}
+m2 <- brm(accuracy ~ 1 + zA + zI + zSTM + zWM # Fixed Effects
+          + (1 + zA + zI + zSTM + zWM | subject) # Varying intercept and slope of subject
+          + (1 + zA + zI + zSTM + zWM | item), # Varying intercept and slope of item
+          prior = c(prior(normal(0, 1), class = Intercept),
+                    prior(normal(0, 1), class = b),
+                    prior(exponential(1), class = sd),
+                    prior(lkj(4), class = cor)),
+          data = children, family = bernoulli, sample_prior = TRUE,
+          iter = 4000, warmup = 2000, chains = 4, cores = 8,
+          control = list(adapt_delta = 0.99))
+```
+
+### Check the model fit.
+```{r}
+plot(m2, ask = FALSE)
+```
+
+### Posterior Predictive Check
+```{r}
+pp_check(m2)
+```
+
+### Model Summary
+```{r}
+summary(m2, prob = .95)
+```
+
+### Hypothesis Testing
+```{r}
+hypotheses2 <- c("zA=0", # There is no effect of age.
+                 "zI = 0", # There is no effect of inhibition.
+                 "zSTM = 0", # There is no effect of short term memory.
+                 "zWM = 0") # There is no effect of working memory.
+hyp2 <- hypothesis(m2, hypothesis = hypotheses2, class = "b")
+plot(hyp2)
+```
+
+```{r}
+hyp2$hypothesis$Evid.Ratio %>% round(digits = 2)
+
+# H0: There is no effect of age, inhibition, short-term memory, working memory, respectively.
+# H1: There is an effect of age, inhibition, short-term memory, working memory, respectively.
+
+# Age: Anecdotal evidence for H0
+# Inhibition: Anecdotal evidence for H1
+# Short-Term: Anecdotal evidence for H0
+# Working Memory: Anecdotal evidence for H0
+```
+
+### Conditional Effects
+```{r}
+plot(conditional_effects(m2), ask = FALSE)
+```
+
+### Bayesian R^2
+```{r}
+bayes_R2(m2)
+```
+
+### Extract the posterior samples of the parameters
+```{r}
+post2 <- as_draws_df(m2)
+```
+
+### If an effect is negative, check the probability that it is positive; if positive, or vice versa.
+```{r}
+mean(post2$b_zA < 0)
+mean(post2$b_zI > 0)
+mean(post2$b_zSTM < 0)
+mean(post2$b_zWM < 0)
+```
+
+### Session Info
+```{r}
+sessionInfo()
+```
