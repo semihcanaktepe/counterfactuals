@@ -409,7 +409,7 @@ summary(m2, prob = .95)
 
 ### Hypothesis Testing
 ```{r}
-hypotheses2 <- c("zA=0", # There is no effect of age.
+hypotheses2 <- c("zA = 0", # There is no effect of age.
                  "zI = 0", # There is no effect of inhibition.
                  "zSTM = 0", # There is no effect of short term memory.
                  "zWM = 0") # There is no effect of working memory.
